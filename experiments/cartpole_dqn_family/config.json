@@ -1,0 +1,42 @@
+{
+  "description": "CartPole experiment: compare simple DQN and simple DDQN with equal training and evaluation budget.",
+  "max_parallel": 1,
+  "max_parallel_gpu": 1,
+  "gpu_devices": [0],
+  "environment": {
+    "env_id": "CartPole-v1"
+  },
+  "shared_args": {
+    "total_timesteps": 500000,
+    "learning_starts": 10000,
+    "capture_video": false,
+    "save_model": true,
+    "track": false
+  },
+  "evaluation": {
+    "cuda": true
+  },
+  "algorithms": [
+    {
+      "name": "dqn_seed{seed}",
+      "algorithm": "dqn",
+      "seeds": [1, 2],
+      "args": {
+        "learning_rate": 0.00025,
+        "buffer_size": 10000,
+        "batch_size": 128
+      }
+    },
+    {
+      "name": "ddqn_seed{seed}",
+      "algorithm": "ddqn",
+      "seeds": [1, 2],
+      "args": {
+        "learning_rate": 0.00025,
+        "buffer_size": 10000,
+        "batch_size": 128,
+        "use_target_network": true
+      }
+    }
+  ]
+}

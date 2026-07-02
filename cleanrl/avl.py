@@ -55,6 +55,12 @@ class Args:
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
+    tau: float = 1.0
+    """the target network update rate"""
+    use_target_network: bool = False
+    """whether to use a separate target network for bootstrapping"""
+    target_network_frequency: int = 500
+    """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
     start_e: float = 1
@@ -96,10 +102,10 @@ def make_env(env_id, seed, idx, capture_video, run_name):
     return thunk
 
 
-# ALGO LOGIC: initialize agent here:
 class QNetwork(nn.Module):
     def __init__(self, env):
         super().__init__()
+        self.n_actions = env.single_action_space.n
         self.network = nn.Sequential(
             nn.Linear(np.array(env.single_observation_space.shape).prod(), 120),
             nn.LayerNorm(120),
@@ -107,17 +113,26 @@ class QNetwork(nn.Module):
             nn.Linear(120, 84),
             nn.LayerNorm(84),
             nn.ReLU(),
-            nn.Linear(84, env.single_action_space.n),
         )
+        self.value_head = nn.Linear(84, 1)
+        self.advantage_head = nn.Linear(84, self.n_actions)
 
     def forward(self, x):
-        return self.network(x)
+        return self.value(x) + self.advantage(x)
+
+    def value(self, x):
+        hidden = self.network(x)
+        return self.value_head(hidden)
+
+    def advantage(self, x):
+        hidden = self.network(x)
+        return self.advantage_head(hidden)
 
     def greedy_actions(self, x):
-        return torch.argmax(self.forward(x), dim=1)
+        return torch.argmax(self.advantage(x), dim=1)
 
     def state_values(self, x):
-        return self.forward(x).max(dim=1).values
+        return self.value(x).flatten()
 
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
@@ -227,6 +242,8 @@ if __name__ == "__main__":
 
     q_network = QNetwork(envs).to(device)
     optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
+    target_network = QNetwork(envs).to(device)
+    target_network.load_state_dict(q_network.state_dict())
 
     rb = ReplayBuffer(
         args.buffer_size,
@@ -320,14 +337,36 @@ if __name__ == "__main__":
             if global_step % args.train_frequency == 0:
                 data = rb.sample(args.batch_size)
                 with torch.no_grad():
-                    target_max, _ = q_network(data.next_observations).max(dim=1)
-                    td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
-                old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-                loss = F.mse_loss(td_target, old_val)
+                    bootstrap_network = target_network if args.use_target_network else q_network
+                    next_value = bootstrap_network.value(data.next_observations).flatten()
+                    current_value_target = q_network.value(data.observations).flatten()
+                    advantages_target = q_network.advantage(data.observations)
+                    selected_advantage_target = advantages_target.gather(1, data.actions).squeeze()
+                    max_advantage_target = advantages_target.max(dim=1).values
+                    td_error_target = (
+                        data.rewards.flatten()
+                        + args.gamma * next_value * (1 - data.dones.flatten())
+                        - current_value_target
+                    )
+                    value_target = (
+                        data.rewards.flatten()
+                        + args.gamma * next_value * (1 - data.dones.flatten())
+                        - (selected_advantage_target - max_advantage_target)
+                    )
+
+                values = q_network.value(data.observations).flatten()
+                advantages = q_network.advantage(data.observations)
+                selected_advantages = advantages.gather(1, data.actions).squeeze()
+                advantage_loss = F.mse_loss(td_error_target, selected_advantages)
+                value_loss = F.mse_loss(value_target, values)
+                loss = advantage_loss + value_loss
 
                 if global_step % 100 == 0:
-                    writer.add_scalar("losses/td_loss", loss, global_step)
-                    writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
+                    writer.add_scalar("losses/advantage_loss", advantage_loss, global_step)
+                    writer.add_scalar("losses/value_loss", value_loss, global_step)
+                    writer.add_scalar("losses/total_loss", loss, global_step)
+                    writer.add_scalar("losses/values", values.mean().item(), global_step)
+                    writer.add_scalar("losses/advantages", selected_advantages.mean().item(), global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
@@ -335,6 +374,13 @@ if __name__ == "__main__":
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
+            # update target network
+            if args.use_target_network and global_step % args.target_network_frequency == 0:
+                for target_network_param, q_network_param in zip(target_network.parameters(), q_network.parameters()):
+                    target_network_param.data.copy_(
+                        args.tau * q_network_param.data + (1.0 - args.tau) * target_network_param.data
+                    )
 
         completed_step = global_step + 1
         if args.eval_frequency > 0 and completed_step % args.eval_frequency == 0:
@@ -378,7 +424,7 @@ if __name__ == "__main__":
 
             repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
             repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-            push_to_hub(args, episodic_returns, repo_id, "DQN", f"runs/{run_name}", f"videos/{run_name}-eval")
+            push_to_hub(args, episodic_returns, repo_id, "AVL", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     envs.close()
     writer.close()

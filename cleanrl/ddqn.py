@@ -55,6 +55,12 @@ class Args:
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
+    tau: float = 1.0
+    """the target network update rate"""
+    use_target_network: bool = True
+    """whether to use a separate target network for bootstrapping"""
+    target_network_frequency: int = 500
+    """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
     start_e: float = 1
@@ -227,6 +233,8 @@ if __name__ == "__main__":
 
     q_network = QNetwork(envs).to(device)
     optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
+    target_network = QNetwork(envs).to(device)
+    target_network.load_state_dict(q_network.state_dict())
 
     rb = ReplayBuffer(
         args.buffer_size,
@@ -320,7 +328,9 @@ if __name__ == "__main__":
             if global_step % args.train_frequency == 0:
                 data = rb.sample(args.batch_size)
                 with torch.no_grad():
-                    target_max, _ = q_network(data.next_observations).max(dim=1)
+                    bootstrap_network = target_network if args.use_target_network else q_network
+                    next_actions = bootstrap_network(data.next_observations).argmax(dim=1, keepdim=True)
+                    target_max = bootstrap_network(data.next_observations).gather(1, next_actions).squeeze()
                     td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
                 old_val = q_network(data.observations).gather(1, data.actions).squeeze()
                 loss = F.mse_loss(td_target, old_val)
@@ -335,6 +345,13 @@ if __name__ == "__main__":
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
+            # update target network
+            if args.use_target_network and global_step % args.target_network_frequency == 0:
+                for target_network_param, q_network_param in zip(target_network.parameters(), q_network.parameters()):
+                    target_network_param.data.copy_(
+                        args.tau * q_network_param.data + (1.0 - args.tau) * target_network_param.data
+                    )
 
         completed_step = global_step + 1
         if args.eval_frequency > 0 and completed_step % args.eval_frequency == 0:
@@ -378,7 +395,7 @@ if __name__ == "__main__":
 
             repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
             repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-            push_to_hub(args, episodic_returns, repo_id, "DQN", f"runs/{run_name}", f"videos/{run_name}-eval")
+            push_to_hub(args, episodic_returns, repo_id, "DDQN", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     envs.close()
     writer.close()
