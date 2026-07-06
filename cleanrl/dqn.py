@@ -16,6 +16,9 @@ from torch.utils.tensorboard import SummaryWriter
 
 from cleanrl_utils.buffers import ReplayBuffer
 
+if not hasattr(np, "float_"):
+    np.float_ = np.float64
+
 
 @dataclass
 class Args:

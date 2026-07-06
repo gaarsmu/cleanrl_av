@@ -1,0 +1,44 @@
+{
+  "description": "Acrobot 200k: DQN, DDQN, DuelQL, AVL; 4 seeds each; eval every 20k.",
+  "output_dir": "runs",
+  "max_parallel_gpu": 4,
+  "gpu_devices": [0, 0, 0, 0],
+  "environment": {
+    "env_id": "Acrobot-v1"
+  },
+  "shared_args": {
+    "total_timesteps": 200000,
+    "learning_starts": 1000,
+    "random_steps": 1000,
+    "capture_video": false,
+    "save_model": false,
+    "track": false,
+    "cuda": true
+  },
+  "evaluation": {
+    "eval_frequency": 20000,
+    "eval_seeds": [0, 1, 2, 3, 4]
+  },
+  "algorithms": [
+    {
+      "name": "dqn_seed{seed}",
+      "algorithm": "dqn",
+      "seeds": [1, 2, 3, 4]
+    },
+    {
+      "name": "ddqn_seed{seed}",
+      "algorithm": "ddqn",
+      "seeds": [1, 2, 3, 4]
+    },
+    {
+      "name": "duelql_seed{seed}",
+      "algorithm": "duelql",
+      "seeds": [1, 2, 3, 4]
+    },
+    {
+      "name": "avl_seed{seed}",
+      "algorithm": "avl",
+      "seeds": [1, 2, 3, 4]
+    }
+  ]
+}
