@@ -29,7 +29,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = False
+    track: bool = True
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -367,10 +367,10 @@ if __name__ == "__main__":
                         + args.gamma * max_next_q * (1 - data.dones.flatten())
                         - current_q
                     )
-                    value_target = current_value_target + args.learning_rate * delta # Not sure if this target implemented correctly
+                    value_target = current_value_target + args.learning_rate * delta # Not sure if this target is implemented correctly
 
-                    importance = 1.0 + args.beta / data.action_probs.flatten()
-                    advantage_target = (   # Not sure if this target implemented correctly
+                    importance = 1.0 + args.beta /  torch.log(data.action_probs.flatten().clamp(min=1e-8))
+                    advantage_target = (   # Not sure if this target is implemented correctly
                             selected_advantage_target
                             + args.learning_rate * importance * delta
                         )
@@ -408,3 +408,46 @@ if __name__ == "__main__":
         completed_step = global_step + 1
         if args.eval_frequency > 0 and completed_step % args.eval_frequency == 0:
             run_periodic_eval(completed_step)
+
+    if args.eval_frequency > 0 and args.total_timesteps % args.eval_frequency != 0:
+        run_periodic_eval(args.total_timesteps)
+
+    write_progress_event(
+        args.progress_file,
+        {
+            "event": "finished",
+            "global_step": args.total_timesteps,
+            "total_timesteps": args.total_timesteps,
+            "algorithm": args.exp_name,
+            "train_seed": args.seed,
+        },
+    )
+
+    if args.save_model:
+        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
+        torch.save(q_network.state_dict(), model_path)
+        print(f"model saved to {model_path}")
+        from cleanrl_utils.evals.dqn_eval import evaluate
+
+        episodic_returns = evaluate(
+            model_path,
+            make_env,
+            args.env_id,
+            eval_episodes=10,
+            run_name=f"{run_name}-eval",
+            Model=QNetwork,
+            device=device,
+            epsilon=args.end_e,
+        )
+        for idx, episodic_return in enumerate(episodic_returns):
+            writer.add_scalar("eval/episodic_return", episodic_return, idx)
+
+        if args.upload_model:
+            from cleanrl_utils.huggingface import push_to_hub
+
+            repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
+            repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
+            push_to_hub(args, episodic_returns, repo_id, "AVL", f"runs/{run_name}", f"videos/{run_name}-eval")
+
+    envs.close()
+    writer.close()
