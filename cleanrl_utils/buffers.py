@@ -39,8 +39,10 @@ __all__ = [
     "BaseBuffer",
     "RolloutBuffer",
     "ReplayBuffer",
+    "ProbReplayBuffer",
     "RolloutBufferSamples",
     "ReplayBufferSamples",
+    "ActionProbReplayBufferSamples",
 ]
 
 
@@ -59,6 +61,13 @@ class ReplayBufferSamples(NamedTuple):
     next_observations: th.Tensor
     dones: th.Tensor
     rewards: th.Tensor
+class ActionProbReplayBufferSamples(NamedTuple):
+    observations: th.Tensor
+    actions: th.Tensor
+    next_observations: th.Tensor
+    dones: th.Tensor
+    rewards: th.Tensor
+    action_probs: th.Tensor
 
 
 def get_action_dim(action_space: spaces.Space) -> int:
@@ -428,6 +437,70 @@ class ReplayBuffer(BaseBuffer):
         if dtype == np.float64:
             return np.float32
         return dtype
+
+class ProbReplayBuffer(ReplayBuffer):
+    """
+    Subclass of ReplayBuffer that additionally tracks action probabilities.
+    """
+
+    action_probs: np.ndarray
+
+    def __init__(
+        self,
+        buffer_size: int,
+        observation_space: spaces.Space,
+        action_space: spaces.Space,
+        device: th.device | str = "auto",
+        n_envs: int = 1,
+        optimize_memory_usage: bool = False,
+        handle_timeout_termination: bool = True,
+    ):
+        super().__init__(
+            buffer_size,
+            observation_space,
+            action_space,
+            device,
+            n_envs=n_envs,
+            optimize_memory_usage=optimize_memory_usage,
+            handle_timeout_termination=handle_timeout_termination,
+        )
+
+        # Allocate memory buffer for action probabilities [buffer_size, n_envs]
+        self.action_probs = np.zeros((self.buffer_size, self.n_envs), dtype=np.float32)
+
+    def add(
+        self,
+        obs: np.ndarray,
+        next_obs: np.ndarray,
+        action: np.ndarray,
+        reward: np.ndarray,
+        done: np.ndarray,
+        infos: list[dict[str, Any]],
+        action_prob: np.ndarray | float,  # Pass float or array per environment
+    ) -> None:
+        # Store the action probabilities before calling super().add() (which updates self.pos)
+        self.action_probs[self.pos] = np.array(action_prob, dtype=np.float32).reshape(self.n_envs)
+
+        # Call base implementation to store obs, next_obs, action, reward, done, timeouts
+        super().add(obs, next_obs, action, reward, done, infos)
+
+    def _get_samples(self, batch_inds: np.ndarray) -> ActionProbReplayBufferSamples:
+        env_indices = np.random.randint(0, high=self.n_envs, size=(len(batch_inds),))
+
+        if self.optimize_memory_usage:
+            next_obs = self.observations[(batch_inds + 1) % self.buffer_size, env_indices, :]
+        else:
+            next_obs = self.next_observations[batch_inds, env_indices, :]
+
+        data = (
+            self.observations[batch_inds, env_indices, :],
+            self.actions[batch_inds, env_indices, :],
+            next_obs,
+            (self.dones[batch_inds, env_indices] * (1 - self.timeouts[batch_inds, env_indices])).reshape(-1, 1),
+            self.rewards[batch_inds, env_indices].reshape(-1, 1),
+            self.action_probs[batch_inds, env_indices].reshape(-1, 1),  # Shape: [batch_size, 1]
+        )
+        return ActionProbReplayBufferSamples(*tuple(map(self.to_torch, data)))
 
 
 class RolloutBuffer(BaseBuffer):
