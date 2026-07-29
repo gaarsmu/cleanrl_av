@@ -29,7 +29,7 @@ class Args:
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
-    track: bool = True
+    track: bool = False
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
@@ -59,6 +59,8 @@ class Args:
     """the discount factor gamma"""
     beta: float = 2.0
     """beta factor in  Residual-Preconditioned RDQ algorithm"""
+    l2_coef: float = 2.0
+    """l2 regularization coefficient"""
     tau: float = 1.0
     """the target network update rate"""
     use_target_network: bool = False
@@ -354,35 +356,42 @@ if __name__ == "__main__":
                     next_value = bootstrap_network.value(data.next_observations).flatten()
                     next_advantage = bootstrap_network.advantage(data.next_observations).max(dim=1).values
                     max_next_q = next_value + next_advantage
-
-                    current_value_target = q_network.value(data.observations).flatten()
-                    advantages_target = q_network.advantage(data.observations)
-                    selected_advantage_target = advantages_target.gather(1, data.actions).squeeze()
-                    current_q = current_value_target + selected_advantage_target
-
-                    max_advantage_target = advantages_target.max(dim=1).values
-
-                    delta = (
+                    
+                    q_target = (
                         data.rewards.flatten()
                         + args.gamma * max_next_q * (1 - data.dones.flatten())
-                        - current_q
                     )
-                    value_target = current_value_target + args.learning_rate * delta # Not sure if this target is implemented correctly
+                    #value_target = current_value_target + args.learning_rate * delta # Not sure if this target is implemented correctly
 
-                    importance = 1.0 + args.beta /  torch.log(data.action_probs.flatten().clamp(min=1e-8))
-                    advantage_target = (   # Not sure if this target is implemented correctly
-                            selected_advantage_target
-                            + args.learning_rate * importance * delta
-                        )
+                    importance = (
+                                    1.0
+                                    + args.beta /
+                                    data.action_probs.flatten().clamp(min=1e-3)
+                                )
+                    #advantage_target = (   # Not sure if this target is implemented correctly
+                        #     selected_advantage_target
+                        #     + args.learning_rate * importance * delta
+                        # )
+                    
 
                 values = q_network.value(data.observations).flatten()
-                value_loss = F.mse_loss(value_target, values)
-
+                value_reg = torch.square(values)  
                 advantages = q_network.advantage(data.observations)
+                adv_reg = torch.sum(torch.square(advantages), dim=-1) 
                 selected_advantages = advantages.gather(1, data.actions).squeeze()
-                advantage_loss = F.mse_loss(advantage_target, selected_advantages)
+                with torch.no_grad():
+                    values_for_adv = q_network.value(data.observations).flatten()
+                with torch.no_grad():
+                    advantages_for_value = q_network.advantage(data.observations).gather(1, data.actions).squeeze()
+                
+                q_value = advantages_for_value + values
+                value_loss = F.mse_loss(q_value, q_target)
+                
+                current_q = importance * (values_for_adv + selected_advantages)
+                advantage_loss = F.mse_loss(current_q,q_target)
 
-                loss = advantage_loss + value_loss
+                l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
+                loss = advantage_loss + l2_loss + value_loss
 
                 if global_step % 100 == 0:
                     writer.add_scalar("losses/advantage_loss", advantage_loss, global_step)
