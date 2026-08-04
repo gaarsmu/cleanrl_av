@@ -43,6 +43,7 @@ class Args:
     """whether to upload the saved model to huggingface"""
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
+    decouple_learning: bool = False
 
     # Algorithm specific arguments
     env_id: str = "CartPole-v1"
@@ -59,7 +60,7 @@ class Args:
     """the discount factor gamma"""
     beta: float = 2.0
     """beta factor in  Residual-Preconditioned RDQ algorithm"""
-    l2_coef: float = 2.0
+    l2_coef: float = 1e-3
     """l2 regularization coefficient"""
     tau: float = 1.0
     """the target network update rate"""
@@ -362,6 +363,15 @@ if __name__ == "__main__":
                         + args.gamma * max_next_q * (1 - data.dones.flatten())
                     )
                     #value_target = current_value_target + args.learning_rate * delta # Not sure if this target is implemented correctly
+                    value = q_network.value(data.observations).flatten()
+                    advantages = q_network.advantage(data.observations)
+                    selected_advantages = advantages.gather(1, data.actions).squeeze()
+                    current_q = selected_advantages + value
+
+
+                    delta = q_target - current_q
+                    value_target = value + delta
+                    advantage_target =  selected_advantages + delta
 
                     importance = (
                                     1.0
@@ -375,23 +385,28 @@ if __name__ == "__main__":
                     
 
                 values = q_network.value(data.observations).flatten()
-                value_reg = torch.square(values)  
+                # value_reg = torch.square(values)  
                 advantages = q_network.advantage(data.observations)
-                adv_reg = torch.sum(torch.square(advantages), dim=-1) 
+                # adv_reg = torch.sum(torch.square(advantages), dim=-1) 
                 selected_advantages = advantages.gather(1, data.actions).squeeze()
-                with torch.no_grad():
-                    values_for_adv = q_network.value(data.observations).flatten()
-                with torch.no_grad():
-                    advantages_for_value = q_network.advantage(data.observations).gather(1, data.actions).squeeze()
+                # with torch.no_grad():
+                #     values_for_adv = q_network.value(data.observations).flatten()
+                # with torch.no_grad():
+                #     advantages_for_value = q_network.advantage(data.observations).gather(1, data.actions).squeeze()
                 
-                q_value = advantages_for_value + values
-                value_loss = F.mse_loss(q_value, q_target)
+                # q_value = advantages_for_value + values
+                # q_value = selected_advantages + values
+                value_loss = F.mse_loss(values, value_target)
                 
-                current_q = importance * (values_for_adv + selected_advantages)
-                advantage_loss = F.mse_loss(current_q,q_target)
+                # current_q =  (values_for_adv + selected_advantages)
+                # current_q = values +  selected_advantages
+                advantage_loss = F.mse_loss(selected_advantages, advantage_target, reduction='none')
+                advantage_loss = (importance * advantage_loss).mean()
 
-                l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
-                loss = advantage_loss + l2_loss + value_loss
+                # value_loss = torch.zeros_like(advantage_loss)
+
+                # l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
+                loss = advantage_loss + value_loss # + l2_loss
 
                 if global_step % 100 == 0:
                     writer.add_scalar("losses/advantage_loss", advantage_loss, global_step)
@@ -399,6 +414,7 @@ if __name__ == "__main__":
                     writer.add_scalar("losses/total_loss", loss, global_step)
                     writer.add_scalar("losses/values", values.mean().item(), global_step)
                     writer.add_scalar("losses/advantages", selected_advantages.mean().item(), global_step)
+                    # writer.add_scalar("losses/l2_loss", l2_loss, global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
