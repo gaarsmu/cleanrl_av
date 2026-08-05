@@ -14,4 +14,4 @@ python -m cleanrl_utils.benchmark \
     --slurm-gpus-per-task 1 \
     --slurm-ntasks 1 \
     --slurm-total-cpus 4 \
-    --slurm-template-path benchmark/cleanrl_1gpu.slurm_template
+    --slurm-template-path benchmark/triton_1gpu.slurm_template
