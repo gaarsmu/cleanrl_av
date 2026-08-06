@@ -64,6 +64,10 @@ class Args:
     """l2 regularization coefficient"""
     tau: float = 1.0
     """the target network update rate"""
+    adv_lr_multiplier: float = 1.0
+    """the learning rate multiplier for the advantage network"""
+    two_time_scale: bool = False
+    """whether to use two-time-scale learning for the value and advantage networks"""
     use_target_network: bool = False
     """whether to use a separate target network for bootstrapping"""
     target_network_frequency: int = 500
@@ -240,7 +244,29 @@ if __name__ == "__main__":
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
     q_network = QNetwork(envs).to(device)
-    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
+    # optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
+    adv_lr = args.learning_rate * args.adv_lr_multiplier
+    if args.two_time_scale:
+        optimizer = optim.Adam([
+            {
+                "params": q_network.network.parameters(),
+                "lr": args.learning_rate,
+            },
+            {
+                "params": q_network.value_head.parameters(),
+                "lr": args.learning_rate,
+            },
+            {
+                "params": q_network.advantage_head.parameters(),
+                "lr": adv_lr,
+            },
+        ])
+    else:
+        optimizer = optim.Adam(
+            q_network.parameters(),
+            lr=args.learning_rate,
+    )
+        
     target_network = QNetwork(envs).to(device)
     target_network.load_state_dict(q_network.state_dict())
 
