@@ -389,8 +389,8 @@ if __name__ == "__main__":
                         + args.gamma * max_next_q * (1 - data.dones.flatten())
                     )
                     #value_target = current_value_target + args.learning_rate * delta # Not sure if this target is implemented correctly
-                    value = q_network.value(data.observations).flatten()
-                    advantages = q_network.advantage(data.observations)
+                    value = bootstrap_network.value(data.observations).flatten()
+                    advantages = bootstrap_network.advantage(data.observations)
                     selected_advantages = advantages.gather(1, data.actions).squeeze()
                     current_q = selected_advantages + value
 
