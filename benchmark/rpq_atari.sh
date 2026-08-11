@@ -22,11 +22,11 @@ uv pip install -e .
 
 # Run benchmark generator to create Slurm array script
 python -m cleanrl_utils.benchmark \
-    --env-ids CartPole-v1 Acrobot-v1 MountainCar-v0 LunarLander-v2 \
-    --command "python cleanrl/avl.py --torch-deterministic --track --use_target_network --total-timesteps 200000 --eval_frequency 1000 --exp_name 'avl'" \
+    --env-ids MinAtar/Asterix-v1 MinAtar/Breakout-v1 MinAtar/Freeway-v1 MinAtar/Seaquest-v1 MinAtar/SpaceInvaders-v1 \
+    --command "python cleanrl/rpq_atari.py --torch-deterministic --track --beta 1.0 --total-timesteps 10000000 --eval_frequency 1000 --exp_name 'rpq_atari' --value-lr-multiplier 0.25 --two_time_scale --use_target_network" \
     --num-seeds 3 \
     --workers 0 \
     --slurm-gpus-per-task 1 \
     --slurm-ntasks 1 \
-    --slurm-total-cpus 4 \
+    --slurm-total-cpus 8 \
     --slurm-template-path benchmark/triton_1gpu.slurm_template

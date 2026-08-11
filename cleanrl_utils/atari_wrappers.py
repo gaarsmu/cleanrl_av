@@ -323,3 +323,19 @@ class AtariWrapper(gym.Wrapper[np.ndarray, int, np.ndarray, int]):
             env = ClipRewardEnv(env)
 
         super().__init__(env)
+        
+class TransposeMinAtarObs(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+        obs_shape = self.observation_space.shape
+
+        self.observation_space = gym.spaces.Box(
+            low=0.0,
+            high=1.0,
+            shape=(obs_shape[2], obs_shape[0], obs_shape[1]),
+            dtype=np.float32,
+        )
+
+    def observation(self, obs):
+        return obs.transpose(2, 0, 1).astype(np.float32)

@@ -23,7 +23,7 @@ uv pip install -e .
 # Run benchmark generator to create Slurm array script
 python -m cleanrl_utils.benchmark \
     --env-ids CartPole-v1 Acrobot-v1 MountainCar-v0 LunarLander-v2 \
-    --command "python cleanrl/rrdq.py --torch-deterministic --track --beta 1.0 --total-timesteps 200000 --eval_frequency 1000 --exp_name 'hardrrdq' --adv-lr-multiplier 4.0 --two_time_scale --" \
+    --command "python cleanrl/rrdq.py --torch-deterministic --track --beta 1.0 --total-timesteps 200000 --eval_frequency 1000 --exp_name 'hardrrdq' --adv-lr-multiplier 4.0 --two_time_scale --use_target_network" \
     --num-seeds 3 \
     --workers 0 \
     --slurm-gpus-per-task 1 \
