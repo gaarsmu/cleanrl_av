@@ -44,6 +44,8 @@ class Args:
     """the wandb's project name"""
     wandb_entity: str = None
     """the entity (team) of wandb's project"""
+    wandb_path: str = None
+    """the path to the wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
     save_model: bool = False
@@ -77,6 +79,8 @@ class Args:
     """the learning rate multiplier for the value network"""
     two_time_scale: bool = False
     """whether to use two-time-scale learning for the value and advantage networks"""
+    max_rarity: float = 5.0
+    """maximum rarity value to prevent extreme importance weights"""
     use_target_network: bool = False
     """whether to use a separate target network for bootstrapping"""
     target_network_frequency: int = 1000
@@ -95,7 +99,7 @@ class Args:
     """number of initial environment steps with uniformly random actions"""
     train_frequency: int = 4
     """the frequency of training"""
-    eval_frequency: int = 0
+    eval_frequency: int = 1000
     """evaluate every eval_frequency environment steps; 0 disables periodic evaluation"""
     eval_seeds: str = "0,1,2,3,4"
     """comma-separated evaluation seeds used at every evaluation point"""
@@ -245,8 +249,9 @@ if __name__ == "__main__":
             name=run_name,
             monitor_gym=True,
             save_code=True,
+            dir=args.wandb_path
         )
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(args.eval_results_path + f"/runs/{run_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
@@ -304,7 +309,16 @@ if __name__ == "__main__":
     )
     start_time = time.time()
     eval_seeds = parse_eval_seeds(args.eval_seeds)
-    eval_results_path = args.eval_results_path or f"runs/{run_name}/eval_results.jsonl"
+    if args.eval_results_path:
+        if os.path.isdir(args.eval_results_path):
+            # Keeps runs organized inside your custom directory: /scratch/work/.../run_name/eval_results.jsonl
+            eval_results_path = args.eval_results_path + f"/runs/{run_name}/eval_results.jsonl"
+        else:
+            # If a full file path was explicitly provided (e.g., .../custom_filename.jsonl)
+            eval_results_path = args.eval_results_path
+    else:
+        # Default fall-back path
+        eval_results_path = f"runs/{run_name}/eval_results.jsonl"
     write_progress_event(
         args.progress_file,
         {
@@ -447,11 +461,19 @@ if __name__ == "__main__":
                 td_loss = F.mse_loss(current_q, q_target)
                 with torch.no_grad():
                     delta = q_target - current_q
+                    mean_abs_delta = delta.abs().mean() + 1e-8
+                    td_gate = (delta.abs()/ (delta.abs() + mean_abs_delta))
+                    rarity = (1.0 / data.action_probs.flatten().clamp(min=1e-3))
+                    rarity = torch.clamp(rarity, max=args.max_rarity)
+                    importance = (args.beta * rarity * td_gate)
 
-                importance = (args.beta /
-                                  data.action_probs.flatten().clamp(min=1e-3)
-                                )
-                extra_advantage_loss = - (importance * delta * selected_advantages).mean()
+
+                # importance = (args.beta /
+                #                   data.action_probs.flatten().clamp(min=1e-3)
+                #                 )
+                # extra_advantage_loss = - (importance * delta * selected_advantages).mean()
+                advantage_target = selected_advantages.detach() + importance.detach() * delta.detach()
+                extra_advantage_loss = F.mse_loss(selected_advantages, advantage_target)
 
                 l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
                 loss = td_loss  + l2_loss + extra_advantage_loss
