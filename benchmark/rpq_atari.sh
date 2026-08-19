@@ -23,7 +23,7 @@ uv pip install -e .
 # Run benchmark generator to create Slurm array script
 python -m cleanrl_utils.benchmark \
     --env-ids MinAtar/Asterix-v1 MinAtar/Breakout-v1 MinAtar/Freeway-v1 MinAtar/Seaquest-v1 MinAtar/SpaceInvaders-v1 \
-    --command "python cleanrl/rpq_atari.py --torch-deterministic --track --beta 1.0 --total-timesteps 10000000 --eval_frequency 1000 --exp_name 'rpq_atari' --value-lr-multiplier 0.25 --two_time_scale --use_target_network" \
+    --command "python cleanrl/rpq_separate_network_minatar.py --torch-deterministic --track --beta 1.0 --total-timesteps 10000000 --eval_frequency 1000 --exp_name 'soft_rpq_atari_separate' --value-lr-multiplier 0.5 --use_target_network --l2_coef 0.005 --eval-results-path '/scratch/work/masoudh1/cleanrl_av' --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'" \
     --num-seeds 3 \
     --workers 0 \
     --slurm-gpus-per-task 1 \
