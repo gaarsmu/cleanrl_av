@@ -1,11 +1,8 @@
-# docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/dqn/#dqn_ataripy
 import os
 import random
+import json
 import time
 from dataclasses import dataclass
-import json
-
-
 import gymnasium as gym
 import numpy as np
 import torch
@@ -14,8 +11,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import tyro
 from torch.utils.tensorboard import SummaryWriter
-
-from cleanrl.dqn import parse_eval_seeds
+from wandb import env
 from cleanrl_utils.atari_wrappers import (
     ClipRewardEnv,
     EpisodicLifeEnv,
@@ -24,8 +20,14 @@ from cleanrl_utils.atari_wrappers import (
     NoopResetEnv,
     TransposeMinAtarObs
 )
-from cleanrl_utils.buffers import ReplayBuffer
+
+from cleanrl_utils.buffers import ProbReplayBuffer
 from gymnasium.wrappers import TimeLimit
+
+
+
+if not hasattr(np, "float_"):
+    np.float_ = np.float64
 
 
 @dataclass
@@ -54,10 +56,7 @@ class Args:
     """whether to upload the saved model to huggingface"""
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
-    eval_frequency: int = 1000
-    """the timesteps it takes to evaluate and log the agent's performance"""
-    use_target_network: bool = True
-    """whether to use a target network"""
+    decouple_learning: bool = False
 
     # Algorithm specific arguments
     env_id: str = "MinAtar/Asterix-v1"
@@ -72,8 +71,20 @@ class Args:
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
+    beta: float = 1.0
+    """beta factor in  Residual-Preconditioned RDQ algorithm"""
+    l2_coef: float = 5e-3
+    """l2 regularization coefficient"""
     tau: float = 1.0
     """the target network update rate"""
+    value_lr_multiplier: float = 1.0
+    """the learning rate multiplier for the value network"""
+    two_time_scale: bool = False
+    """whether to use two-time-scale learning for the value and advantage networks"""
+    max_rarity: float = 5.0
+    """maximum rarity value to prevent extreme importance weights"""
+    use_target_network: bool = False
+    """whether to use a separate target network for bootstrapping"""
     target_network_frequency: int = 1000
     """the timesteps it takes to update the target network"""
     batch_size: int = 32
@@ -86,8 +97,12 @@ class Args:
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
     learning_starts: int = 80000
     """timestep to start learning"""
+    random_steps: int = 0
+    """number of initial environment steps with uniformly random actions"""
     train_frequency: int = 4
     """the frequency of training"""
+    eval_frequency: int = 200000
+    """evaluate every eval_frequency environment steps; 0 disables periodic evaluation"""
     eval_seeds: str = "0,1,2,3,4"
     """comma-separated evaluation seeds used at every evaluation point"""
     eval_epsilon: float = 0.0
@@ -96,9 +111,6 @@ class Args:
     """path to write periodic evaluation results as JSON lines"""
     progress_file: str = ""
     """path to write lightweight progress events as JSON lines"""
-    eval_results_path: str = ""
-    """path to write periodic evaluation results as JSON lines"""
-
 
 def make_env(env_id, seed, idx, capture_video, run_name):
     def thunk():
@@ -112,34 +124,59 @@ def make_env(env_id, seed, idx, capture_video, run_name):
         env = TimeLimit(env, max_episode_steps=5000)
 
 
+        # env = NoopResetEnv(env, noop_max=30)
+        # env = MaxAndSkipEnv(env, skip=4)
+        # env = EpisodicLifeEnv(env)
+        # if "FIRE" in env.unwrapped.get_action_meanings():
+        #     env = FireResetEnv(env)
+        # env = ClipRewardEnv(env)
+        # env = gym.wrappers.ResizeObservation(env, (84, 84))
+        # env = gym.wrappers.GrayScaleObservation(env)
+        # env = gym.wrappers.FrameStack(env, 4)
+
         env.action_space.seed(seed)
         return env
 
     return thunk
 
-
-# ALGO LOGIC: initialize agent here:
-class QNetwork(nn.Module):
+class AdvNetwork(nn.Module):
     def __init__(self, env):
         super().__init__()
         in_channels = env.single_observation_space.shape[0]
-        self.network = nn.Sequential(
+        self.advnetwork = nn.Sequential(
             nn.Conv2d(in_channels, 16, kernel_size=3, stride=1),
             nn.ReLU(),
             nn.Flatten(),
             nn.Linear(in_features=1024, out_features=128),
             nn.ReLU(),
-            nn.Linear(128, env.single_action_space.n),
+            nn.Linear(in_features=128, out_features=env.single_action_space.n)
         )
 
     def forward(self, x):
-        return self.network(x)
+        return self.advnetwork(x)
 
     def greedy_actions(self, x):
-        return torch.argmax(self.forward(x), dim=1)
-    
+        return torch.argmax(self.advnetwork(x), dim=1)
+
+class ValueNetwork(nn.Module):
+    def __init__(self, env):
+        super().__init__()
+        in_channels = env.single_observation_space.shape[0]
+        self.valuenetwork = nn.Sequential(
+            nn.Conv2d(in_channels, 16, kernel_size=3, stride=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(in_features=1024, out_features=128),
+            nn.ReLU(),
+            nn.Linear(in_features=128, out_features=1)
+        )
+
+    def forward(self, x):
+        return self.valuenetwork(x)
+
+
     def state_values(self, x):
-        return self.forward(x).max(dim=1).values
+        return self.valuenetwork(x)
 
 
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
@@ -151,9 +188,9 @@ def parse_eval_seeds(eval_seeds: str) -> list[int]:
         return []
     return [int(seed.strip()) for seed in eval_seeds.split(",") if seed.strip()]
 
-
-def evaluate_q_network(q_network, env_id, eval_seeds, device, gamma):
-    q_network.eval()
+def evaluate_q_network(adv_network,value_network, env_id, eval_seeds, device, gamma):
+    adv_network.eval()
+    value_network.eval()
     episodic_returns = []
     episodic_lengths = []
     average_overestimations = []
@@ -172,15 +209,15 @@ def evaluate_q_network(q_network, env_id, eval_seeds, device, gamma):
             truncated = False
             while not done:
                 obs_tensor = torch.Tensor(np.array([obs])).to(device)
-                state_value_estimates.append(float(q_network.state_values(obs_tensor).cpu().numpy()[0]))
-                action = int(q_network.greedy_actions(obs_tensor).cpu().numpy()[0])
+                state_value_estimates.append(float(value_network(obs_tensor).cpu().numpy()[0]))
+                action = int(adv_network.greedy_actions(obs_tensor).cpu().numpy()[0])
                 obs, reward, terminated, truncated, _ = env.step(action)
                 episodic_return += float(reward)
                 rewards.append(float(reward))
                 done = terminated or truncated
             bootstrap_value = 0.0
             if truncated:
-                bootstrap_value = float(q_network.state_values(torch.Tensor(np.array([obs])).to(device)).cpu().numpy()[0])
+                bootstrap_value = float(value_network(torch.Tensor(np.array([obs])).to(device)).cpu().numpy()[0])
             returns = []
             discounted_return = bootstrap_value
             for reward in reversed(rewards):
@@ -196,7 +233,8 @@ def evaluate_q_network(q_network, env_id, eval_seeds, device, gamma):
             episodic_lengths.append(len(rewards))
             average_overestimations.append(float(np.mean(overestimations)))
             start_overestimations.append(overestimations[0])
-    q_network.train()
+    adv_network.train()
+    value_network.train()
     return episodic_returns, episodic_lengths, average_overestimations, start_overestimations
 
 def write_eval_result(path, result):
@@ -249,12 +287,27 @@ if __name__ == "__main__":
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
-    q_network = QNetwork(envs).to(device)
-    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
-    target_network = QNetwork(envs).to(device)
-    target_network.load_state_dict(q_network.state_dict())
+    adv_network = AdvNetwork(envs).to(device)
+    value_network = ValueNetwork(envs).to(device)
 
-    rb = ReplayBuffer(
+    value_lr = args.learning_rate * args.value_lr_multiplier
+
+    adv_optimizer = optim.Adam(
+        adv_network.parameters(),
+        lr=args.learning_rate,)
+
+    value_optimizer = optim.Adam(
+        value_network.parameters(),
+        lr=value_lr,)
+        
+    adv_target_network = AdvNetwork(envs).to(device)
+    adv_target_network.load_state_dict(adv_network.state_dict())
+
+    value_target_network = ValueNetwork(envs).to(device)
+    value_target_network.load_state_dict(value_network.state_dict())
+
+
+    rb = ProbReplayBuffer(
         args.buffer_size,
         envs.single_observation_space,
         envs.single_action_space,
@@ -274,7 +327,6 @@ if __name__ == "__main__":
     else:
         # Default fall-back path
         eval_results_path = f"runs/{run_name}/eval_results.jsonl"
-
     write_progress_event(
         args.progress_file,
         {
@@ -289,7 +341,8 @@ if __name__ == "__main__":
         if args.eval_frequency <= 0 or not eval_seeds:
             return
         episodic_returns, episodic_lengths, average_overestimations, start_overestimations = evaluate_q_network(
-            q_network,
+            adv_network,
+            value_network,
             args.env_id,
             eval_seeds,
             device,
@@ -321,19 +374,37 @@ if __name__ == "__main__":
 
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
+    # obs = obs.astype(np.float32) 
     run_periodic_eval(0)
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
-        if random.random() < epsilon:
+
+        adv_values = adv_network(torch.Tensor(obs).to(device))
+        greedy_actions = torch.argmax(adv_values, dim=1).cpu().numpy()
+
+        if global_step < args.random_steps or random.random() < epsilon:
             actions = np.array([envs.single_action_space.sample() for _ in range(envs.num_envs)])
         else:
-            q_values = q_network(torch.Tensor(obs).to(device))
-            actions = torch.argmax(q_values, dim=1).cpu().numpy()
+            actions = greedy_actions
+
+        n_actions = envs.single_action_space.n
+        if global_step < args.random_steps:
+            # Pure random initial steps: P(a) = 1 / N
+            action_probs = np.full(envs.num_envs, 1.0 / n_actions, dtype=np.float32)
+        else:
+            # Epsilon-greedy steps:
+            # Non-greedy action: epsilon / N
+            # Greedy action:     (1 - epsilon) + (epsilon / N)
+            action_probs = np.where(
+                actions == greedy_actions,
+                (1.0 - epsilon) + (epsilon / n_actions),
+                epsilon / n_actions
+            ).astype(np.float32)
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(actions)
-
+        # next_obs = next_obs.astype(np.float32)
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if "final_info" in infos:
             for info in infos["final_info"]:
@@ -347,38 +418,78 @@ if __name__ == "__main__":
         for idx, trunc in enumerate(truncations):
             if trunc:
                 real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
+        # print(f"Adding to replay buffer: obs shape {obs.shape}, next_obs shape {real_next_obs.shape}")
+        rb.add(obs, real_next_obs, actions, rewards, terminations, infos, action_probs)
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
-
+        
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
                 data = rb.sample(args.batch_size)
                 with torch.no_grad():
-                    target_max, _ = target_network(data.next_observations).max(dim=1)
-                    td_target = data.rewards.flatten() + args.gamma * target_max * (1 - data.dones.flatten())
-                old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-                loss = F.mse_loss(td_target, old_val)
+                    adv_bootstrap_network = adv_target_network if args.use_target_network else adv_network
+                    value_bootstrap_network = value_target_network if args.use_target_network else value_network
+
+                    next_value = value_bootstrap_network(data.next_observations).flatten()
+                    next_advantage = adv_bootstrap_network(data.next_observations).max(dim=1).values
+                    max_next_q = next_value + next_advantage
+                    
+                    q_target = (
+                        data.rewards.flatten()
+                        + args.gamma * max_next_q * (1 - data.dones.flatten())
+                    )
+                    
+
+                values = value_network(data.observations).flatten()
+                
+                advantages = adv_network(data.observations)
+                
+                selected_advantages = advantages.gather(1, data.actions).squeeze()
+
+                value_reg = torch.square(values)  
+                adv_reg = torch.sum(torch.square(advantages), dim=-1) 
+
+                current_q = values + selected_advantages
+
+                td_loss = F.mse_loss(current_q, q_target)
+
+                l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
+                loss = td_loss  + l2_loss
 
                 if global_step % 100 == 0:
-                    writer.add_scalar("losses/td_loss", loss, global_step)
-                    writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
+                    writer.add_scalar("losses/tdloss", td_loss, global_step)
+                    writer.add_scalar("losses/total_loss", loss, global_step)
+                    writer.add_scalar("losses/values", values.mean().item(), global_step)
+                    writer.add_scalar("losses/advantages", selected_advantages.mean().item(), global_step)
+                    writer.add_scalar("losses/l2_loss", l2_loss, global_step)
                     print("SPS:", int(global_step / (time.time() - start_time)))
                     writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
                 # optimize the model
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                adv_optimizer.zero_grad()
+                value_optimizer.zero_grad()
+                
+                adv_optimizer.step()
+                value_optimizer.step()
 
+                loss.backward()
+                
+                adv_optimizer.step()
+                value_optimizer.step()
             # update target network
-            if global_step % args.target_network_frequency == 0:
-                for target_network_param, q_network_param in zip(target_network.parameters(), q_network.parameters()):
-                    target_network_param.data.copy_(
-                        args.tau * q_network_param.data + (1.0 - args.tau) * target_network_param.data
+            if args.use_target_network and global_step % args.target_network_frequency == 0:
+                for adv_target_network_param, adv_network_param in zip(adv_target_network.parameters(), adv_network.parameters()):
+                    adv_target_network_param.data.copy_(
+                        args.tau * adv_network_param.data + (1.0 - args.tau) * adv_target_network_param.data
                     )
+
+                for value_target_network_param, value_network_param in zip(value_target_network.parameters(), value_network.parameters()):
+                    value_target_network_param.data.copy_(
+                        args.tau * value_network_param.data + (1.0 - args.tau) * value_target_network_param.data
+                    )
+
         completed_step = global_step + 1
         if args.eval_frequency > 0 and completed_step % args.eval_frequency == 0:
             run_periodic_eval(completed_step)
@@ -397,31 +508,31 @@ if __name__ == "__main__":
         },
     )
 
-    if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
-        torch.save(q_network.state_dict(), model_path)
-        print(f"model saved to {model_path}")
-        from cleanrl_utils.evals.dqn_eval import evaluate
+    # if args.save_model:
+    #     model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
+    #     torch.save(q_network.state_dict(), model_path)
+    #     print(f"model saved to {model_path}")
+    #     from cleanrl_utils.evals.dqn_eval import evaluate
 
-        episodic_returns = evaluate(
-            model_path,
-            make_env,
-            args.env_id,
-            eval_episodes=10,
-            run_name=f"{run_name}-eval",
-            Model=QNetwork,
-            device=device,
-            epsilon=args.end_e,
-        )
-        for idx, episodic_return in enumerate(episodic_returns):
-            writer.add_scalar("eval/episodic_return", episodic_return, idx)
+    #     episodic_returns = evaluate(
+    #         model_path,
+    #         make_env,
+    #         args.env_id,
+    #         eval_episodes=10,
+    #         run_name=f"{run_name}-eval",
+    #         Model=QNetwork,
+    #         device=device,
+    #         epsilon=args.end_e,
+    #     )
+    #     for idx, episodic_return in enumerate(episodic_returns):
+    #         writer.add_scalar("eval/episodic_return", episodic_return, idx)
 
-        if args.upload_model:
-            from cleanrl_utils.huggingface import push_to_hub
+    #     if args.upload_model:
+    #         from cleanrl_utils.huggingface import push_to_hub
 
-            repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
-            repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-            push_to_hub(args, episodic_returns, repo_id, "DQN", f"runs/{run_name}", f"videos/{run_name}-eval")
+    #         repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
+    #         repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
+    #         push_to_hub(args, episodic_returns, repo_id, "AVL", f"runs/{run_name}", f"videos/{run_name}-eval")
 
     envs.close()
     writer.close()

@@ -71,7 +71,7 @@ class Args:
     """the discount factor gamma"""
     beta: float = 1.0
     """beta factor in  Residual-Preconditioned RDQ algorithm"""
-    l2_coef: float = 1e-3
+    l2_coef: float = 5e-3
     """l2 regularization coefficient"""
     tau: float = 1.0
     """the target network update rate"""
@@ -99,7 +99,7 @@ class Args:
     """number of initial environment steps with uniformly random actions"""
     train_frequency: int = 4
     """the frequency of training"""
-    eval_frequency: int = 1000
+    eval_frequency: int = 200000
     """evaluate every eval_frequency environment steps; 0 disables periodic evaluation"""
     eval_seeds: str = "0,1,2,3,4"
     """comma-separated evaluation seeds used at every evaluation point"""
@@ -461,11 +461,12 @@ if __name__ == "__main__":
                 td_loss = F.mse_loss(current_q, q_target)
                 with torch.no_grad():
                     delta = q_target - current_q
-                    mean_abs_delta = delta.abs().mean() + 1e-8
-                    td_gate = (delta.abs()/ (delta.abs() + mean_abs_delta))
+                    # mean_abs_delta = delta.abs().mean() + 1e-8
+                    # td_gate = (delta.abs()/ (delta.abs() + mean_abs_delta))
                     rarity = (1.0 / data.action_probs.flatten().clamp(min=1e-3))
                     rarity = torch.clamp(rarity, max=args.max_rarity)
-                    importance = (args.beta * rarity * td_gate)
+                    # importance = (args.beta * rarity * td_gate)
+                    importance = (args.beta * rarity)
 
 
                 # importance = (args.beta /

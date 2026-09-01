@@ -48,12 +48,21 @@ env_dict = {
     # 'MicrortsAttackShapedReward-v1': 'MicrortsAttackHRL-v1',
     # 'MicrortsProduceCombatUnitsShapedReward-v1':  'MicrortsProduceCombatUnitHRL-v1',
     # 'MicrortsRandomEnemyShapedReward3-v1': 'MicrortsRandomEnemyHRL3-v1',
+    "MinAtar/Asterix-v1": "Asterix-v1",
+    "MinAtar/Breakout-v1": "Breakout-v1",
+    "MinAtar/Freeway-v1": "Freeway-v1",
+    "MinAtar/Seaquest-v1": "Seaquest-v1",
+    "MinAtar/SpaceInvaders-v1": "SpaceInvaders-v1"
 }
 exp_convert_dict = {
-    "ppo_atari_visual": "PPO",
-    "dqn_atari_visual": "DQN",
-    "apex_dqn_atari_visual": "Ape-X DQN",
-    "c51_atari_visual": "C51",
+    # "ppo_atari_visual": "PPO",
+    # "dqn_atari_visual": "DQN",
+    # "apex_dqn_atari_visual": "Ape-X DQN",
+    # "c51_atari_visual": "C51",
+    "soft_rpq_atari_3": "Soft RPQ Corrected Importance Factor (Ours)",
+    "soft_rdq_atari": "Soft RDQ",
+    "dqn": "DQN",
+    "soft_rpq_atari_separate": "Soft RPQ Separate",
     # 'ppo_no_mask-0': 'Invalid action penalty, $r_{\\text{invalid}}=0$',
     # 'ppo_no_mask--0.1': 'Invalid action penalty, $r_{\\text{invalid}}=-0.1$',
     # 'ppo_no_mask--0.01': 'Invalid action penalty, $r_{\\text{invalid}}=-0.01$',
@@ -154,7 +163,7 @@ def get_df_for_env(env_id):
                 break
             temp_row = sampled_run.iloc[current_row].copy()
             temp_row["global_step"] = timestep
-            df = df.append(temp_row)
+            df = df._append(temp_row)
 
         envs_same_x_axis += [df]
     return pd.concat(envs_same_x_axis, ignore_index=True)

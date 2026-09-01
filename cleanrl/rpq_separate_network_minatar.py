@@ -22,6 +22,8 @@ from cleanrl_utils.atari_wrappers import (
 )
 
 from cleanrl_utils.buffers import ProbReplayBuffer
+from gymnasium.wrappers import TimeLimit
+
 
 
 if not hasattr(np, "float_"):
@@ -77,6 +79,8 @@ class Args:
     """the target network update rate"""
     value_lr_multiplier: float = 1.0
     """the learning rate multiplier for the value network"""
+    adv_lr_multiplier: float = 1.0
+    """the learning rate multiplier for the advantage network"""
     two_time_scale: bool = False
     """whether to use two-time-scale learning for the value and advantage networks"""
     max_rarity: float = 5.0
@@ -99,7 +103,7 @@ class Args:
     """number of initial environment steps with uniformly random actions"""
     train_frequency: int = 4
     """the frequency of training"""
-    eval_frequency: int = 1000
+    eval_frequency: int = 200000
     """evaluate every eval_frequency environment steps; 0 disables periodic evaluation"""
     eval_seeds: str = "0,1,2,3,4"
     """comma-separated evaluation seeds used at every evaluation point"""
@@ -119,6 +123,8 @@ def make_env(env_id, seed, idx, capture_video, run_name):
             env = gym.make(env_id)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = TransposeMinAtarObs(env)
+        env = TimeLimit(env, max_episode_steps=5000)
+
 
         # env = NoopResetEnv(env, noop_max=30)
         # env = MaxAndSkipEnv(env, skip=4)
@@ -195,6 +201,7 @@ def evaluate_q_network(adv_network,value_network, env_id, eval_seeds, device, ga
         for eval_seed in eval_seeds:
             env = gym.make(env_id)
             env = TransposeMinAtarObs(env)
+            env = TimeLimit(env, max_episode_steps=5000)
             env.action_space.seed(eval_seed)
             obs, _ = env.reset(seed=eval_seed)
             done = False
@@ -245,7 +252,8 @@ def write_progress_event(path, event):
 if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    time_name = int(time.time())
+    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{time_name}"
     if args.track:
         import wandb
 
@@ -259,12 +267,14 @@ if __name__ == "__main__":
             save_code=True,
             dir=args.wandb_path
         )
-    writer = SummaryWriter(args.eval_results_path + f"/runs/{run_name}")
+    writer = SummaryWriter(args.eval_results_path + f"/runs/{args.exp_name}/{args.env_id}__{args.seed}__{time_name}")
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
-
+    run_dir = args.eval_results_path + f"/runs/{args.exp_name}/{args.env_id}__{args.seed}__{time_name}"
+    with open(f"{run_dir}/config.json", "w") as f:
+        json.dump(vars(args), f, indent=2)
     # TRY NOT TO MODIFY: seeding
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -283,10 +293,11 @@ if __name__ == "__main__":
     value_network = ValueNetwork(envs).to(device)
 
     value_lr = args.learning_rate * args.value_lr_multiplier
+    adv_lr = args.learning_rate * args.adv_lr_multiplier
 
     adv_optimizer = optim.Adam(
         adv_network.parameters(),
-        lr=args.learning_rate,)
+        lr=adv_lr,)
 
     value_optimizer = optim.Adam(
         value_network.parameters(),
@@ -312,7 +323,7 @@ if __name__ == "__main__":
     if args.eval_results_path:
         if os.path.isdir(args.eval_results_path):
             # Keeps runs organized inside your custom directory: /scratch/work/.../run_name/eval_results.jsonl
-            eval_results_path = args.eval_results_path + f"/runs/{run_name}/eval_results.jsonl"
+            eval_results_path = args.eval_results_path + f"/runs/{args.exp_name}/{args.env_id}__{args.seed}__{time_name}/eval_results.jsonl"
         else:
             # If a full file path was explicitly provided (e.g., .../custom_filename.jsonl)
             eval_results_path = args.eval_results_path
@@ -367,7 +378,7 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     obs, _ = envs.reset(seed=args.seed)
     # obs = obs.astype(np.float32) 
-    
+    run_periodic_eval(0)
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
@@ -415,7 +426,7 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
-
+        
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
