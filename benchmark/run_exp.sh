@@ -35,22 +35,25 @@ CURRENT_SEED=${SEEDS[$SEED_INDEX]}
 echo "Starting Task $SLURM_ARRAY_TASK_ID | Env: $CURRENT_ENV | Seed: $CURRENT_SEED"
 
 # 5. Run RPQ and RDQ
-# srun python cleanrl/rpq_separate_network_minatar.py \
-#     --env-id "$CURRENT_ENV" \
-#     --seed $CURRENT_SEED \
-#     --torch-deterministic \
-#     --track \
-#     --beta 1.0 \
-#     --total-timesteps 10000000 \
-#     --eval_frequency 200000 \
-#     --exp_name 'soft rpq twotimescale changing advantage learning rate' \
-#     --value-lr-multiplier 1 \
-#     --adv-lr-multiplier 0.25 \
-#     --use_target_network \
-#     --exploration-fraction 0.1 \
-#     --l2_coef 0.005 \
-#     --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
-#     --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
+srun python cleanrl/rpq_separate_network_minatar.py \
+    --env-id "$CURRENT_ENV" \
+    --seed $CURRENT_SEED \
+    --torch-deterministic \
+    --track \
+    --beta 100.0 \
+    --beta_final 1.0 \
+    --beta_fraction 0.8 \
+    --beta_scheduling True \
+    --total-timesteps 10000000 \
+    --eval_frequency 200000 \
+    --exp_name 'soft rpq beta scheduling' \
+    --value-lr-multiplier 1 \
+    --adv-lr-multiplier 1 \
+    --use_target_network \
+    --exploration-fraction 0.1 \
+    --l2_coef 0.005 \
+    --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
+    --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
 
 # # 5. Run RDQ
 # srun python cleanrl/rdq_separate_network_minatar.py \

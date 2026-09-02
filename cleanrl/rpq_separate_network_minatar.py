@@ -83,6 +83,12 @@ class Args:
     """the learning rate multiplier for the advantage network"""
     two_time_scale: bool = False
     """whether to use two-time-scale learning for the value and advantage networks"""
+    beta_scheduling: bool = False
+    """whether to use beta scheduling for the Residual-Preconditioned RDQ algorithm"""
+    beta_final: float = 1.0
+    """the final beta value for the Residual-Preconditioned RDQ algorithm"""
+    beta_fraction: float = 0.10
+    """the fraction of `total-timesteps` it takes from start-beta to go end-beta"""
     max_rarity: float = 5.0
     """maximum rarity value to prevent extreme importance weights"""
     use_target_network: bool = False
@@ -382,6 +388,7 @@ if __name__ == "__main__":
     for global_step in range(args.total_timesteps):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
+        beta = linear_schedule(args.beta, args.beta_final, args.beta_fraction * args.total_timesteps, global_step) if args.beta_scheduling else args.beta
 
         adv_values = adv_network(torch.Tensor(obs).to(device))
         greedy_actions = torch.argmax(adv_values, dim=1).cpu().numpy()
@@ -463,7 +470,7 @@ if __name__ == "__main__":
                     # td_gate = (delta.abs()/ (delta.abs() + mean_abs_delta))
                     rarity = (1.0 / data.action_probs.flatten().clamp(min=1e-3))
                     rarity = torch.clamp(rarity, max=args.max_rarity)
-                    importance = (args.beta * rarity)
+                    importance = (beta * rarity)
 
 
                 advantage_target = selected_advantages.detach() + importance.detach() * delta.detach()
