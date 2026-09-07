@@ -57,6 +57,8 @@ class Args:
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
     decouple_learning: bool = False
+    remove_one: bool = False
+    """whether to remove one in advantage networks update"""
 
     # Algorithm specific arguments
     env_id: str = "MinAtar/Asterix-v1"
@@ -461,7 +463,7 @@ if __name__ == "__main__":
                 value_reg = torch.square(values)  
                 adv_reg = torch.sum(torch.square(advantages), dim=-1) 
 
-                current_q = values + selected_advantages
+                current_q = (values + selected_advantages.detach() if args.remove_one else values + selected_advantages)
 
                 td_loss = F.mse_loss(current_q, q_target)
                 with torch.no_grad():
@@ -474,7 +476,7 @@ if __name__ == "__main__":
 
 
                 advantage_target = selected_advantages.detach() + importance.detach() * delta.detach()
-                extra_advantage_loss = F.mse_loss(selected_advantages, advantage_target)
+                extra_advantage_loss = 0.5 * F.mse_loss(selected_advantages, advantage_target)
 
                 l2_loss = 0.5 * args.l2_coef * (value_reg + adv_reg).mean()
                 loss = td_loss  + l2_loss + extra_advantage_loss
