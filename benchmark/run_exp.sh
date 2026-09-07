@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=cleanrl_minatar
 #SBATCH --partition=gpu-v100-32g
-#SBATCH --time=08:00:00                   
+#SBATCH --time=05:00:00                   
 #SBATCH --ntasks=1                        
 #SBATCH --cpus-per-task=4                 
 #SBATCH --mem=16G                         
@@ -34,26 +34,26 @@ CURRENT_SEED=${SEEDS[$SEED_INDEX]}
 
 echo "Starting Task $SLURM_ARRAY_TASK_ID | Env: $CURRENT_ENV | Seed: $CURRENT_SEED"
 
-# 5. Run RPQ and RDQ
-srun python cleanrl/rpq_separate_network_minatar.py \
-    --env-id "$CURRENT_ENV" \
-    --seed $CURRENT_SEED \
-    --torch-deterministic \
-    --track \
-    --beta 100.0 \
-    --beta_final 1.0 \
-    --beta_fraction 0.8 \
-    --beta_scheduling True \
-    --total-timesteps 10000000 \
-    --eval_frequency 200000 \
-    --exp_name 'soft rpq beta scheduling' \
-    --value-lr-multiplier 1 \
-    --adv-lr-multiplier 1 \
-    --use_target_network \
-    --exploration-fraction 0.1 \
-    --l2_coef 0.005 \
-    --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
-    --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
+# # 5. Run RPQ and RDQ
+# srun python cleanrl/rpq_separate_network_minatar.py \
+#     --env-id "$CURRENT_ENV" \
+#     --seed $CURRENT_SEED \
+#     --torch-deterministic \
+#     --track \
+#     --beta 100.0 \
+#     --beta_final 1.0 \
+#     --beta_fraction 0.8 \
+#     --beta_scheduling \
+#     --total-timesteps 10000000 \
+#     --eval_frequency 200000 \
+#     --exp_name 'soft rpq beta scheduling' \
+#     --value-lr-multiplier 1 \
+#     --adv-lr-multiplier 1 \
+#     --use_target_network \
+#     --exploration-fraction 0.1 \
+#     --l2_coef 0.005 \
+#     --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
+#     --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
 
 # # 5. Run RDQ
 # srun python cleanrl/rdq_separate_network_minatar.py \
@@ -85,3 +85,16 @@ srun python cleanrl/rpq_separate_network_minatar.py \
 #     --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
 #     --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
 
+
+# # 5. Run ME Layer Idea!
+srun python cleanrl/Mean_Expansion.py \
+    --env-id "$CURRENT_ENV" \
+    --seed $CURRENT_SEED \
+    --torch-deterministic \
+    --track \
+    --total-timesteps 10000000 \
+    --eval_frequency 200000 \
+    --exp_name 'ME Layer Machado' \
+    --use_target_network \
+    --eval-results-path '/scratch/work/masoudh1/cleanrl_av' \
+    --wandb-path '/scratch/work/masoudh1/cleanrl_av/wandb'
