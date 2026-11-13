@@ -66,6 +66,7 @@ COMMAND=(
     --exploration-fraction 0.1
     --l2-coef 0.005
     --save-model
+    --remove_one
     --eval-results-path "$OUTPUT_ROOT"
     --wandb-path "$OUTPUT_ROOT/wandb"
     "$@"
@@ -86,6 +87,7 @@ mkdir -p "$OUTPUT_ROOT/wandb"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
+export PYTHONUNBUFFERED=1
 
 # Disable tracing before reading private values; never echo the proxy settings.
 set +x
