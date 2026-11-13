@@ -116,6 +116,7 @@ celerybeat-schedule
 
 # Environments
 .env
+benchmark/.env.atari.local
 .venv
 env/
 venv/
