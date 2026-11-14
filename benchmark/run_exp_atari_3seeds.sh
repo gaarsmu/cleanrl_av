@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=cleanrl_atari
+#SBATCH --job-name=cleanrl
 #SBATCH --partition=ADA6000
 #SBATCH --time=2-00:00:00
 #SBATCH --ntasks=1
