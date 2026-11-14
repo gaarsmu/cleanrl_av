@@ -451,8 +451,8 @@ if __name__ == "__main__":
                 advantages = adv_network(data.observations)
                 selected_advantages = advantages.gather(1, data.actions.long()).squeeze(1)
                 current_q = values + selected_advantages - advantages.mean(dim=1)
-                # Standard clipped TD-error update for dueling Q-learning.
-                td_loss = F.smooth_l1_loss(current_q, q_target, reduction="sum")
+                # Mean squared TD error, matching RPQ and CleanRL DQN.
+                td_loss = F.mse_loss(current_q, q_target)
                 loss = td_loss
 
                 if global_step % 100 == 0:
